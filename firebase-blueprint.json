@@ -1,0 +1,143 @@
+{
+  "entities": {
+    "Schedule": {
+      "title": "Schedule",
+      "description": "Prayer and Bible Study schedule",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "type": { "type": "string", "enum": ["prayer", "bible_study", "meeting"] },
+        "dayOfWeek": { "type": "string" },
+        "time": { "type": "string" },
+        "location": { "type": "string" },
+        "assignedLeader": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["title", "type", "dayOfWeek", "time", "location", "createdAt", "updatedAt", "createdBy"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Fellowship announcements and updates",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "priority": { "type": "string", "enum": ["low", "regular", "high"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["title", "content", "date", "priority", "createdAt", "updatedAt", "createdBy"]
+    },
+    "Event": {
+      "title": "Event",
+      "description": "Programs and fellowship events",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "eventDate": { "type": "string", "format": "date-time" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "location": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["title", "eventDate", "location", "createdAt", "updatedAt", "createdBy"]
+    },
+    "Media": {
+      "title": "Media",
+      "description": "Sermons and teachings",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "speaker": { "type": "string" },
+        "type": { "type": "string", "enum": ["audio", "video"] },
+        "mediaUrl": { "type": "string" },
+        "datePreached": { "type": "string", "format": "date-time" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["title", "speaker", "type", "mediaUrl", "createdAt", "updatedAt", "createdBy"]
+    },
+    "Visitor": {
+      "title": "Visitor",
+      "description": "Visitor and new member registration",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "major": { "type": "string" },
+        "year": { "type": "string" },
+        "howDidYouHear": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "createdAt"]
+    },
+    "Executive": {
+      "title": "Executive",
+      "description": "Fellowship leaders profiles",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "bio": { "type": "string" },
+        "email": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["name", "role", "createdAt", "updatedAt", "createdBy"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Authorized administrators",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "schedules": {
+      "schema": { "$ref": "#/entities/Schedule" },
+      "description": "All public schedules"
+    },
+    "announcements": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "All public announcements"
+    },
+    "events": {
+      "schema": { "$ref": "#/entities/Event" },
+      "description": "Upcoming events"
+    },
+    "media": {
+      "schema": { "$ref": "#/entities/Media" },
+      "description": "Media archives"
+    },
+    "visitors": {
+      "schema": { "$ref": "#/entities/Visitor" },
+      "description": "Visitor registrations (private)"
+    },
+    "executives": {
+      "schema": { "$ref": "#/entities/Executive" },
+      "description": "Executive profiles"
+    },
+    "admins": {
+      "schema": { "$ref": "#/entities/Admin" },
+      "description": "List of authorized emails"
+    }
+  }
+}
