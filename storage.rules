@@ -1,0 +1,18 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email is string;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        firestore.exists(/databases/(default)/documents/admins/$(request.auth.token.email));
+    }
+
+    match /uploads/{collectionName}/{fileName} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

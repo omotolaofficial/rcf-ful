@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  /* Ocean Blue / Deep Slate Navy (replacing the default blue) */
+  --color-blue-50: #e8f1f6;
+  --color-blue-100: #d6e7f1;
+  --color-blue-700: #3A7CA5; /* Ocean Blue - Primary */
+  --color-blue-800: #2A5F82; /* Hover Primary */
+  --color-blue-900: #1E3A5F; /* Primary Dark */
+
+  /* Warm Amber (replacing the default amber) */
+  --color-amber-400: #f6b583; /* Lighter Accent */
+  --color-amber-500: #F4A261; /* Main Accent */
+  --color-amber-600: #e38d4a; /* Darker Accent */
+
+  /* Neutrals (replacing slate with our defined neutrals) */
+  --color-slate-50: #F9FAFB; /* App Background */
+  --color-slate-100: #F3F4F6;
+  --color-slate-200: #E5E7EB; /* Borders */
+  --color-slate-500: #6B7280; /* Muted Text */
+  --color-slate-600: #4B5563; /* Body Text */
+  --color-slate-700: #374151;
+  --color-slate-800: #111827; /* Heading Text */
+}
+
+@layer base {
+  /* Base styles for the app */
+  body {
+    background-color: var(--color-slate-50);
+    color: var(--color-slate-600);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--color-slate-800);
+  }
+}

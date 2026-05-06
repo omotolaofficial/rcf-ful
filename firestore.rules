@@ -1,0 +1,150 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 0.1 Primitives
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email is string;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'super_admin';
+    }
+    
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // Helpers
+    function isValidSchedule(data) {
+      return data.keys().hasAll(['title', 'type', 'dayOfWeek', 'time', 'location', 'createdAt', 'updatedAt', 'createdBy']) &&
+        data.title is string && data.title.size() <= 100 && data.title.size() > 0 &&
+        data.type is string && (data.type in ['prayer', 'bible_study', 'meeting']) &&
+        data.dayOfWeek is string && data.dayOfWeek.size() <= 20 &&
+        data.time is string && data.time.size() <= 20 &&
+        data.location is string && data.location.size() <= 100 &&
+        data.createdBy == request.auth.uid;
+    }
+
+    function isValidAnnouncement(data) {
+      return data.keys().hasAll(['title', 'content', 'date', 'priority', 'createdAt', 'updatedAt', 'createdBy']) &&
+        data.title is string && data.title.size() <= 100 && data.title.size() > 0 &&
+        data.content is string && data.content.size() <= 2000 &&
+        data.date is string && 
+        data.priority is string && (data.priority in ['low', 'regular', 'high']) &&
+        data.createdBy == request.auth.uid;
+    }
+
+    function isValidEvent(data) {
+      return data.keys().hasAll(['title', 'eventDate', 'location', 'createdAt', 'updatedAt', 'createdBy']) &&
+        data.title is string && data.title.size() <= 100 && data.title.size() > 0 &&
+        data.eventDate is string &&
+        data.location is string && data.location.size() <= 100 &&
+        data.createdBy == request.auth.uid;
+    }
+
+    function isValidMedia(data) {
+       return data.keys().hasAll(['title', 'speaker', 'type', 'mediaUrl', 'createdAt', 'updatedAt', 'createdBy']) &&
+        data.title is string && data.title.size() <= 100 && data.title.size() > 0 &&
+        data.speaker is string && data.speaker.size() <= 100 &&
+        data.type is string && (data.type in ['audio', 'video', 'image']) &&
+        data.mediaUrl is string && data.mediaUrl.size() <= 500 &&
+        data.createdBy == request.auth.uid;
+    }
+
+    function isValidExecutive(data) {
+      return data.keys().hasAll(['name', 'role', 'createdAt', 'updatedAt', 'createdBy']) &&
+        data.name is string && data.name.size() <= 100 && data.name.size() > 0 &&
+        data.role is string && data.role.size() <= 100 &&
+        data.createdBy == request.auth.uid;
+    }
+
+    function isValidVisitor(data) {
+      return data.keys().hasAll(['name', 'email', 'createdAt']) &&
+        data.name is string && data.name.size() <= 100 && data.name.size() > 0 &&
+        data.email is string && data.email.size() <= 100;
+    }
+
+    // Admins Collection
+    match /admins/{adminUid} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == adminUid);
+      // Only super admins can manage admin accounts and role assignments.
+      allow create: if isSuperAdmin() &&
+        incoming().keys().hasAll(['email', 'role', 'createdAt', 'updatedAt']) &&
+        incoming().email is string && incoming().email.size() <= 100 &&
+        incoming().role in ['admin', 'super_admin'] &&
+        incoming().updatedAt == request.time;
+      allow update: if isSuperAdmin() &&
+        incoming().keys().hasAll(['email', 'role', 'createdAt', 'updatedAt']) &&
+        incoming().email is string && incoming().email.size() <= 100 &&
+        incoming().role in ['admin', 'super_admin'] &&
+        incoming().updatedAt == request.time;
+      allow delete: if isSuperAdmin();
+    }
+
+    // Public Collections (Admin manage, Public read)
+    match /schedules/{scheduleId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(scheduleId) && isValidSchedule(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(scheduleId) && isValidSchedule(incoming()) && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(scheduleId);
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(announcementId) && isValidAnnouncement(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(announcementId) && isValidAnnouncement(incoming()) && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(announcementId);
+    }
+
+    match /events/{eventId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(eventId) && isValidEvent(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(eventId) && isValidEvent(incoming()) && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(eventId);
+    }
+
+    match /media/{mediaId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(mediaId) && isValidMedia(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(mediaId) && isValidMedia(incoming()) && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(mediaId);
+    }
+
+    match /executives/{execId} {
+      allow read: if true;
+      allow create: if isAdmin() && isValidId(execId) && isValidExecutive(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(execId) && isValidExecutive(incoming()) && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(execId);
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(postId);
+    }
+
+    match /siteSections/{sectionId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(sectionId);
+    }
+
+    // Visitors (Public create, Admin read/manage)
+    match /visitors/{visitorId} {
+      allow read: if isAdmin();
+      allow create: if isValidId(visitorId) && isValidVisitor(incoming()) && incoming().createdAt == request.time;
+      // Visitors shouldn't be publicly modifiable after creation, only by admins
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+  }
+}
