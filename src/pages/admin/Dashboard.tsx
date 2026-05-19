@@ -1,5 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { db, storage } from '../../lib/firebase';
+import { db } from '../../lib/firebase';
+export interface MediaItem {
+  id?: string;
+  title?: string;
+  imageUrl?: string;
+  isUploading?: boolean;
+  [key: string]: any; // fallback for multi-collection flexibility
+}
+
 import {
   collection,
   query,
@@ -13,12 +21,6 @@ import {
 } from 'firebase/firestore';
 
 import {
-  ref,
-  uploadBytesResumable,
-  getDownloadURL
-} from 'firebase/storage';
-
-import {
   Calendar,
   Video,
   Users,
@@ -30,7 +32,6 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '../../contexts/AuthContext';
-import { format } from 'date-fns';
 
 /* -------------------- TABS -------------------- */
 const TABS = [
@@ -44,9 +45,12 @@ const TABS = [
   { id: 'admins', label: 'Admins', icon: ShieldAlert }
 ];
 
+
 /* -------------------- TYPES -------------------- */
 type UploadState = {
   downloadURL: string | null;
+  publicId: string | null;
+  resourceType: string | null;
   error: string | null;
   fileName: string;
   isUploading: boolean;
@@ -55,7 +59,7 @@ type UploadState = {
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('schedules');
-  const [data, setData] = useState<any[]>([]);
+  const [data, setData] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(false);
 
   const { user } = useAuth();
@@ -63,10 +67,9 @@ export default function AdminDashboard() {
   const [isEditing, setIsEditing] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
 
-  // ✅ SINGLE SOURCE OF TRUTH FOR UPLOAD
   const [uploadState, setUploadState] = useState<Record<string, UploadState>>({});
 
-  /* -------------------- FETCH DATA -------------------- */
+  /* ---------------- FETCH ---------------- */
   useEffect(() => {
     fetchData();
   }, [activeTab]);
@@ -76,7 +79,11 @@ export default function AdminDashboard() {
     try {
       const q = query(collection(db, activeTab));
       const snapshot = await getDocs(q);
-      setData(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      const fetchedData: MediaItem[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...(doc.data() as Omit<MediaItem, "id">)
+      }));
+      setData(fetchedData);
     } catch (err) {
       console.error(err);
     } finally {
@@ -84,157 +91,208 @@ export default function AdminDashboard() {
     }
   };
 
-  /* -------------------- FILE UPLOAD -------------------- */
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, key: string) => {
+  /* ---------------- UPLOAD KEY UTILS ---------------- */
+
+  const getAllowedTypes = () => {
+    if (activeTab === "media") {
+      return ["audio", "video"]; // allow audio + video
+    }
+    return ["image"]; // all other tabs only allow images
+  };
+
+  /* ---------------- UPLOAD (CLOUDINARY) ---------------- */
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, key: string) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const fileRef = ref(
-      storage,
-      `uploads/${activeTab}/${Date.now()}_${file.name}`
-    );
+    const allowedTypes = getAllowedTypes();
+    const isImage = file.type.startsWith("image/");
+    const isVideo = file.type.startsWith("video/");
+    const isAudio = file.type.startsWith("audio/");
 
-    const uploadTask = uploadBytesResumable(fileRef, file);
+    if (
+      (allowedTypes.includes("image") && isImage) ||
+      (allowedTypes.includes("video") && isVideo) ||
+      (allowedTypes.includes("audio") && isAudio)
+    ) {
+      // ✅ proceed with upload
+    } else {
+      alert(`Only ${allowedTypes.join(" or ")} files are allowed in the ${activeTab} tab.`);
+      return;
+    }
 
+    if (file.size > 20 * 1024 * 1024) {
+      alert('File size exceeds the 20MB limit. Please choose a smaller file.');
+      return;
+    }
+
+    const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+    const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+
+    if (!cloudName || !uploadPreset) {
+      console.error("ENV DEBUG:", { cloudName, uploadPreset });
+      alert("Cloudinary config missing. Please check your .env variables.");
+      return;
+    }
+
+    // Mark upload as starting
     setUploadState(prev => ({
       ...prev,
       [key]: {
         downloadURL: null,
+        publicId: null,
+        resourceType: null,
         error: null,
         fileName: file.name,
         isUploading: true,
-        progress: 0
+        progress: 50 // fake progress for fetch
       }
     }));
 
-    uploadTask.on(
-      'state_changed',
-      snapshot => {
-        const progress = Math.round(
-          (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-        );
+    try {
+      const isVideo = file.type.startsWith('video/');
+      const isAudio = file.type.startsWith('audio/');
+      const resourceType = isVideo ? 'video' : isAudio ? 'raw' : 'image';
+      const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
 
-        setUploadState(prev => ({
-          ...prev,
-          [key]: {
-            ...prev[key],
-            downloadURL: prev[key]?.downloadURL ?? null,
-            progress,
-            isUploading: true
-          }
-        }));
-      },
-      error => {
-        console.error(error);
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("upload_preset", uploadPreset);
+      formData.append("folder", "rcf-images");
 
-        setEditItem(prev => ({
-          ...prev,
-          [key]: undefined
-        }));
+      // Clean async/await fetch
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        body: formData
+      });
 
-        setUploadState(prev => ({
-          ...prev,
-          [key]: {
-            downloadURL: null,
-            error: error.message,
-            fileName: file.name,
-            isUploading: false,
-            progress: 0
-          }
-        }));
-      },
-      async () => {
-        try {
-          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+      const res = await response.json();
 
-          setEditItem(prev => ({
-            ...prev,
-            [key]: downloadURL
-          }));
-
-          setUploadState(prev => ({
-            ...prev,
-            [key]: {
-              downloadURL,
-              error: null,
-              fileName: file.name,
-              isUploading: false,
-              progress: 100
-            }
-          }));
-        } catch (error: any) {
-          console.error(error);
-          setUploadState(prev => ({
-            ...prev,
-            [key]: {
-              downloadURL: null,
-              error: error?.message ?? 'Upload finished, but the file URL could not be resolved.',
-              fileName: file.name,
-              isUploading: false,
-              progress: 100
-            }
-          }));
-        }
+      if (!response.ok) {
+        alert("Upload Failed! Cloudinary said: " + (res?.error?.message || "Unknown Error"));
+        throw new Error(res?.error?.message || "Upload failed");
       }
-    );
+
+      console.log('Cloudinary response:', res);
+      const url = res.secure_url;
+      const mediaKey = activeTab === 'media' ? 'mediaUrl' : 'imageUrl';
+
+      // 1. Update form state (THIS is what Firestore uses)
+      setEditItem(prev => ({
+        ...(prev || {}),
+        [mediaKey]: url,
+        cloudinaryPublicId: res.public_id,
+        cloudinaryResourceType: res.resource_type
+      }));
+
+      // 2. Update UI state only
+      setUploadState(prev => ({
+        ...prev,
+        [mediaKey]: {
+          downloadURL: url,
+          publicId: res.public_id,
+          resourceType: res.resource_type,
+          error: null,
+          fileName: file.name,
+          isUploading: false,
+          progress: 100
+        }
+      }));
+    } catch (err: any) {
+      console.error('Upload error:', err);
+      alert("Something went wrong during upload: " + err.message);
+      setUploadState(prev => ({
+        ...prev,
+        [key]: {
+          downloadURL: null,
+          publicId: null,
+          resourceType: null,
+          error: err.message || "Failed to upload",
+          fileName: file.name,
+          isUploading: false,
+          progress: 0
+        }
+      }));
+    }
   };
 
-  /* -------------------- SAVE -------------------- */
+  /* ---------------- SAVE ---------------- */
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
 
-    // 🚨 ONLY CHECK REAL UPLOADING FILES
-    const uploading = Object.values(uploadState).some(state => (state as UploadState).isUploading);
-
+    const uploading = Object.values(uploadState).some((s) => (s as UploadState)?.isUploading ?? false);
     if (uploading) {
-      alert('Please wait for upload to finish');
+      alert("Please wait for all active uploads to finish before saving.");
       return;
     }
 
     try {
-      const payload = { ...editItem };
+      const mediaKey = activeTab === 'media' ? 'mediaUrl' : 'imageUrl';
 
-      if (!editItem.id) {
-        payload.createdAt = serverTimestamp();
-        payload.createdBy = user.uid;
-      }
+      const payload = {
+        ...editItem,
+        [mediaKey]: editItem?.[mediaKey] || uploadState?.[mediaKey]?.downloadURL
+      };
 
-      payload.updatedAt = serverTimestamp();
-
+      // Safe purge of undefined values so Firestore doesn't throw errors
       Object.keys(payload).forEach(k => {
         if (payload[k] === undefined) delete payload[k];
       });
 
-      if (activeTab === 'admins' && payload.email) {
-        const adminEmail = String(payload.email).trim().toLowerCase();
-        const adminPayload = {
+      console.log("🔥 SAVING PAYLOAD:", payload);
+      console.log("🔥 MEDIA KEY:", mediaKey);
+      console.log("🔥 EDIT ITEM:", editItem);
+
+      if (activeTab === 'admins') {
+        const email = payload.email.trim().toLowerCase();
+
+        await setDoc(doc(db, activeTab, email), {
           ...payload,
-          email: adminEmail
-        };
+          email,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.uid,
+          createdAt: payload.id ? payload.createdAt : serverTimestamp(),
+          createdBy: payload.id ? payload.createdBy : user.uid
+        }, { merge: true });
 
-        delete adminPayload.id;
-
-        await setDoc(doc(db, activeTab, adminEmail), adminPayload, { merge: true });
-      } else if (editItem.id) {
-        const { id, ...rest } = payload;
-        await updateDoc(doc(db, activeTab, id), rest);
       } else {
-        await addDoc(collection(db, activeTab), payload);
+        const requiresMedia = ['events', 'announcements', 'posts', 'media', 'executives']
+          .includes(activeTab);
+
+        if (requiresMedia && !payload[mediaKey]) {
+          alert("Media is required before saving.");
+          return;
+        }
+
+        if (!editItem.id) {
+          payload.createdAt = serverTimestamp();
+          payload.createdBy = user.uid;
+        }
+
+        payload.updatedAt = serverTimestamp();
+
+        if (editItem.id) {
+          const docRef = doc(db, activeTab, editItem.id);
+          const { id, ...rest } = payload;
+          await updateDoc(docRef, rest);
+        } else {
+          await addDoc(collection(db, activeTab), payload);
+        }
       }
 
       setIsEditing(false);
       setEditItem(null);
       setUploadState({});
       fetchData();
+
     } catch (err) {
       console.error(err);
-      alert('Error saving');
+      alert("Save failed");
     }
   };
-
   const handleDelete = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this item?')) return;
+    if (!window.confirm("Are you sure you want to delete this item?")) return;
     try {
       await deleteDoc(doc(db, activeTab, id));
       fetchData();
@@ -244,7 +302,7 @@ export default function AdminDashboard() {
     }
   };
 
-  /* -------------------- UI -------------------- */
+  /* ---------------- UI ACTIONS ---------------- */
   const startCreate = () => {
     setEditItem({});
     setUploadState({});
@@ -252,39 +310,88 @@ export default function AdminDashboard() {
   };
 
   const startEdit = (item: any) => {
-    setEditItem(item);
+    setEditItem({ ...item });
     setUploadState({});
     setIsEditing(true);
   };
 
-  const renderFileUpload = (key: string, label: string) => (
-    <div className="mb-4">
-      <label>{label}</label>
+  /* ---------------- RENDERING UTILS ---------------- */
+  const renderUpload = (key: string) => {
+    const state = uploadState[key] as UploadState | undefined;
+    const isUploading = state?.isUploading ?? false;
+    const progress = state?.progress ?? 0;
+    const error = state?.error ?? null;
+    const isDone = state?.downloadURL ?? null;
 
-      <input
-        type="file"
-        onChange={(e) => handleFileUpload(e, key)}
-      />
+    return (
+      <div style={{ marginBottom: 20, padding: 10, border: '1px dashed #cbd5e1', borderRadius: 8, background: '#f8fafc' }}>
+        <label style={{ display: 'block', marginBottom: 8, fontWeight: 'bold', color: '#334155' }}>
+          Upload Media (or paste URL)
+        </label>
 
-      {uploadState[key]?.isUploading && (
-        <p>{uploadState[key].progress}% uploading...</p>
-      )}
+        <input
+          type="text"
+          value={editItem?.[key] || ''}
+          onChange={e => setEditItem((prev: any) => ({ ...(prev || {}), [key]: e.target.value }))}
+          placeholder="https://..."
+          style={{ display: 'block', width: '100%', marginBottom: 10, padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+          disabled={isUploading}
+        />
 
-      {!uploadState[key]?.isUploading && uploadState[key]?.downloadURL && (
-        <p style={{ color: 'green' }}>Upload complete</p>
-      )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <input
+            type="file"
+            accept={
+              activeTab === "media"
+                ? "audio/*,video/*"
+                : "image/*"
+            }
+            onChange={(e) => handleFileUpload(e, activeTab === 'media' ? 'mediaUrl' : 'imageUrl')}
+            disabled={isUploading}
+            style={{ fontSize: '14px' }}
+          />
+        </div>
 
-      {uploadState[key]?.error && (
-        <p style={{ color: 'red' }}>{uploadState[key].error}</p>
-      )}
-    </div>
-  );
+        {isUploading && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#1e3a8a', fontWeight: 'bold', marginBottom: '4px' }}>
+              <span>Uploading...</span>
+              <span>{progress}%</span>
+            </div>
+            <div style={{ width: '100%', background: '#e2e8f0', height: 6, borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ width: `${progress}%`, background: '#3b82f6', height: '100%', transition: 'width 0.2s' }}></div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <p style={{ color: '#ef4444', marginTop: 10, fontSize: '14px', fontWeight: '500' }}>{error}</p>
+        )}
+
+        {isDone && (
+          <p style={{ color: '#10b981', marginTop: 10, fontSize: '14px', fontWeight: '600' }}>✓ Upload Complete</p>
+        )}
+
+        {/* DEBUG LOG VISUALIZER */}
+        <div style={{ marginTop: 15, padding: 10, background: '#1e293b', color: '#10b981', fontSize: '11px', fontFamily: 'monospace', borderRadius: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+          <strong>Upload State Debugger:</strong><br />
+          isUploading: {String(isUploading)}<br />
+          progress: {progress}%<br />
+          error: {String(error)}<br />
+          downloadURL: {String(isDone)}<br />
+          current editItem URL: {String(editItem?.[key])}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>Admin Dashboard</h2>
+      <h2 style={{ fontSize: '28px', fontWeight: '800', marginBottom: '24px', color: '#0f172a' }}>
+        Admin Dashboard
+      </h2>
 
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '24px', flexWrap: 'wrap' }}>
         {TABS.map(tab => {
           const Icon = tab.icon;
           return (
@@ -294,98 +401,167 @@ export default function AdminDashboard() {
                 setActiveTab(tab.id);
                 setIsEditing(false);
                 setEditItem(null);
+                setUploadState({});
               }}
               style={{
-                padding: '8px 16px',
+                padding: '10px 18px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
                 background: activeTab === tab.id ? '#1e3a8a' : '#f1f5f9',
-                color: activeTab === tab.id ? 'white' : '#1e293b',
-                border: 'none',
+                color: activeTab === tab.id ? 'white' : '#475569',
+                border: activeTab === tab.id ? '1px solid #1e3a8a' : '1px solid #cbd5e1',
                 borderRadius: '8px',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                fontWeight: '600',
+                transition: 'all 0.2s'
               }}
             >
-              <Icon size={16} />
+              <Icon size={18} />
               {tab.label}
             </button>
           )
         })}
       </div>
 
-      <button onClick={startCreate} style={{ padding: '8px 16px', marginBottom: '20px', cursor: 'pointer' }}>+ Add New</button>
+      <button
+        onClick={startCreate}
+        style={{ padding: '10px 20px', marginBottom: '20px', cursor: 'pointer', background: '#f59e0b', color: '#1e3a8a', border: 'none', borderRadius: '8px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}
+      >
+        <span style={{ fontSize: '18px' }}>+</span> Add New Record
+      </button>
 
       {isEditing && (
-        <form onSubmit={handleSave}>
-          {activeTab === 'admins' ? (
-            <>
+        <div style={{ background: 'white', padding: '24px', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '24px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+          <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '20px', color: '#1e293b' }}>
+            {editItem?.id ? 'Edit Record' : 'Create New Record'}
+          </h3>
+          <form onSubmit={handleSave}>
+            {activeTab === 'admins' ? (
+              <>
+                <input
+                  placeholder="Email Address"
+                  type="email"
+                  value={editItem?.email || ''}
+                  onChange={e => setEditItem((prev: any) => ({ ...(prev || {}), email: e.target.value }))}
+                  style={{ display: 'block', width: '100%', marginBottom: 15, padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  required
+                />
+                <select
+                  value={editItem?.role || 'admin'}
+                  onChange={e => setEditItem((prev: any) => ({ ...(prev || {}), role: e.target.value }))}
+                  style={{ display: 'block', width: '100%', marginBottom: 15, padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                >
+                  <option value="admin">Admin</option>
+                  <option value="super_admin">Super Admin</option>
+                </select>
+              </>
+            ) : (
               <input
-                placeholder="Email Address"
-                type="email"
-                value={editItem?.email || ''}
-                onChange={e => setEditItem({ ...editItem, email: e.target.value })}
-                style={{ display: 'block', width: '100%', marginBottom: 10, padding: 8 }}
-                required
+                placeholder="Title / Name"
+                value={editItem?.title || editItem?.name || ''}
+                onChange={e => {
+                  const key = ['executives', 'visitors'].includes(activeTab) ? 'name' : 'title';
+                  setEditItem((prev: any) => ({ ...(prev || {}), [key]: e.target.value }))
+                }}
+                style={{ display: 'block', width: '100%', marginBottom: 15, padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                required={activeTab !== 'schedules'}
               />
-              <select
-                value={editItem?.role || 'admin'}
-                onChange={e => setEditItem({ ...editItem, role: e.target.value })}
-                style={{ display: 'block', width: '100%', marginBottom: 10, padding: 8 }}
+            )}
+
+            {activeTab === 'announcements' && (
+              <>
+                <textarea
+                  placeholder="Content details..."
+                  value={editItem?.content || ''}
+                  onChange={e => setEditItem((prev: any) => ({ ...(prev || {}), content: e.target.value }))}
+                  rows={4}
+                  style={{ display: 'block', width: '100%', marginBottom: 15, padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                />
+                <input
+                  type="date"
+                  value={editItem?.date || ''}
+                  onChange={e => setEditItem((prev: any) => ({ ...(prev || {}), date: e.target.value }))}
+                  style={{ display: 'block', marginBottom: 15, padding: '10px 14px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  required
+                />
+              </>
+            )}
+
+            {/* Unified Upload Area */}
+            {['events', 'announcements', 'posts', 'media', 'executives'].includes(activeTab) && (
+              renderUpload(activeTab === 'media' ? 'mediaUrl' : 'imageUrl')
+            )}
+
+            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+              <button
+                type="submit"
+                disabled={Object.values(uploadState).some((s) => (s as UploadState)?.isUploading ?? false)}
+                style={{
+                  padding: '12px 24px',
+                background: Object.values(uploadState).some((s) => (s as UploadState)?.isUploading ?? false) ? '#94a3b8' : '#1e3a8a',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: Object.values(uploadState).some((s) => (s as UploadState)?.isUploading ?? false) ? 'not-allowed' : 'pointer',
+                fontWeight: 'bold',
+                flex: 1
+              }}
               >
-                <option value="admin">Admin</option>
-                <option value="super_admin">Super Admin</option>
-              </select>
-            </>
-          ) : (
-            <input
-              placeholder="Title"
-              value={editItem?.title || ''}
-              onChange={e =>
-                setEditItem({ ...editItem, title: e.target.value })
-              }
-              style={{ display: 'block', width: '100%', marginBottom: 10, padding: 8 }}
-            />
-          )}
-
-          {activeTab === 'announcements' && (
-            <>
-              <textarea
-                placeholder="Content"
-                value={editItem?.content || ''}
-                onChange={e => setEditItem({ ...editItem, content: e.target.value })}
-                rows={4}
-                style={{ display: 'block', width: '100%', marginBottom: 10 }}
-              />
-              <input
-                type="date"
-                value={editItem?.date || ''}
-                onChange={e => setEditItem({ ...editItem, date: e.target.value })}
-                style={{ display: 'block', marginBottom: 10 }}
-              />
-            </>
-          )}
-
-          {/* Example file upload */}
-          {renderFileUpload('mediaUrl', 'Upload File')}
-
-          <button type="submit">Save</button>
-        </form>
+                {Object.values(uploadState).some((s) => (s as UploadState)?.isUploading ?? false) ? 'Uploading...' : `Save ${activeTab}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setIsEditing(false); setEditItem(null); setUploadState({}); }}
+                style={{ padding: '12px 24px', background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
       )}
 
-      <hr />
+      <hr style={{ margin: '30px 0', borderColor: '#e2e8f0' }} />
 
       {loading ? (
-        <p>Loading...</p>
+        <div style={{ padding: '40px', textAlign: 'center', color: '#64748b', fontSize: '18px', fontWeight: '500' }}>
+          Loading records...
+        </div>
+      ) : data.length === 0 ? (
+        <div style={{ padding: '40px', textAlign: 'center', color: '#64748b', background: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1' }}>
+          No records found for {activeTab}.
+        </div>
       ) : (
-        data.map(item => (
-          <div key={item.id} style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px', padding: '10px', border: '1px solid #ccc' }}>
-            <h4 style={{ margin: 0, flex: 1 }}>{activeTab === 'admins' ? item.email : item.title}</h4>
-            {activeTab === 'admins' && <span style={{ marginRight: 10, padding: '4px 8px', background: '#e2e8f0', borderRadius: 4, fontSize: 12 }}>{item.role}</span>}
-            <button onClick={() => startEdit(item)}>Edit</button>
-            <button onClick={() => handleDelete(item.id)} style={{ color: 'red' }}>Delete</button>
-          </div>
-        ))
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {data.map((item: MediaItem) => (
+            <div key={item.id} style={{ display: 'flex', gap: '15px', alignItems: 'center', padding: '16px', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+              <div style={{ flex: 1 }}>
+                <h4 style={{ margin: 0, fontSize: '16px', color: '#0f172a', fontWeight: '600' }}>
+                  {activeTab === 'admins' ? item.email : (item.title || item.name || 'Untitled Record')}
+                </h4>
+                {activeTab === 'admins' && (
+                  <span style={{ display: 'inline-block', marginTop: '6px', padding: '4px 10px', background: '#e0e7ff', color: '#3730a3', borderRadius: '4px', fontSize: '12px', fontWeight: '700' }}>
+                    {item.role.toUpperCase()}
+                  </span>
+                )}
+              </div>
+
+              <button
+                onClick={() => startEdit(item)}
+                style={{ padding: '8px 16px', background: '#f8fafc', color: '#334155', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', transition: 'background 0.2s' }}
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => handleDelete(item.id)}
+                style={{ padding: '8px 16px', background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: '6px', cursor: 'pointer', fontWeight: '600', transition: 'background 0.2s' }}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

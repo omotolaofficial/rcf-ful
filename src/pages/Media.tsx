@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { db, storage } from '../lib/firebase';
+import { db } from '../lib/firebase';
 import { collection, getDocs, orderBy, query, limit as queryLimit, startAfter } from 'firebase/firestore';
-import { getDownloadURL, getMetadata, listAll, ref } from 'firebase/storage';
 import { Calendar, Headphones, Image as ImageIcon, Video, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { ExpandableText } from '../components/ExpandableText';
@@ -14,20 +13,12 @@ type MediaItem = {
   datePreached?: string;
   type?: string;
   mediaUrl?: string;
-  storagePath?: string;
+  imageUrl?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 };
 
-type StorageMediaItem = {
-  id: string;
-  title: string;
-  type: 'audio' | 'video' | 'image';
-  mediaUrl: string;
-  storagePath: string;
-};
-
-type LoadSource = 'firestore' | 'storage' | 'mixed';
+type LoadSource = 'firestore';
 
 function normalizeType(value: string | undefined) {
   return (value ?? '').trim().toLowerCase();
@@ -57,6 +48,21 @@ function inferTypeFromUrlOrName(value: string): 'audio' | 'video' | 'image' | nu
   if (/\.(mp4|webm|mov|m4v)(\?|#|$)/.test(lower)) return 'video';
   if (/\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|#|$)/.test(lower)) return 'image';
   return null;
+}
+
+function getItemMediaUrl(item: MediaItem): string {
+  return (item.mediaUrl?.trim() || item.imageUrl?.trim() || '').trim();
+}
+
+function getEffectiveMediaType(item: MediaItem): 'audio' | 'video' | 'image' {
+  const normalized = normalizeType(item.type);
+  if (['audio', 'video', 'image', 'picture', 'photo'].includes(normalized)) {
+    if (normalized === 'picture' || normalized === 'photo') return 'image';
+    return normalized as 'audio' | 'video' | 'image';
+  }
+
+  const inferredFromUrl = inferTypeFromUrlOrName(getItemMediaUrl(item));
+  return inferredFromUrl ?? 'audio';
 }
 
 function filenameToTitle(name: string) {
@@ -119,83 +125,32 @@ export default function MediaPage() {
     }
   }
 
-  async function fetchFromStorage(): Promise<StorageMediaItem[]> {
-    const root = ref(storage, 'uploads/media');
-    const listing = await listAll(root);
-    const files = listing.items;
-
-    const resolved = await Promise.allSettled(
-      files.map(async (itemRef, idx) => {
-        const [url, metadata] = await Promise.all([getDownloadURL(itemRef), getMetadata(itemRef)]);
-        const inferred = inferTypeFromContentType(metadata.contentType) ?? inferTypeFromUrlOrName(metadata.name);
-        if (!inferred) return null;
-        return {
-          id: `storage_${idx}_${metadata.generation ?? metadata.name}`,
-          title: filenameToTitle(metadata.name),
-          type: inferred,
-          mediaUrl: url,
-          storagePath: itemRef.fullPath
-        } satisfies StorageMediaItem;
-      })
-    );
-
-    return resolved
-      .filter((r): r is PromiseFulfilledResult<StorageMediaItem> => r.status === 'fulfilled')
-      .map((r) => r.value)
-      .filter((v): v is StorageMediaItem => Boolean(v));
-  }
-
   // Preload function to cache data in background
   const preloadMediaData = useCallback(async () => {
     if (cacheRef.current.size > 0) {
-      // Use cached data
       const cached = cacheRef.current.get('all');
       if (cached) {
         setMediaItems(cached);
-        setLoadSource('firestore'); // Default to firestore for cached data
+        setLoadSource('firestore');
         setLoading(false);
       }
       return;
     }
-    
+
     try {
       setLoading(true);
-      const [firestoreResult, storageResult] = await Promise.allSettled([fetchFromFirestore(), fetchFromStorage()]);
-      
-      const firestoreItems = firestoreResult.status === 'fulfilled' ? firestoreResult.value : [];
-      const storageItems = storageResult.status === 'fulfilled' ? storageResult.value : [];
-      
-      const mapByUrl = new Map<string, MediaItem>();
-      for (const item of storageItems) {
-        if (item.mediaUrl) mapByUrl.set(item.mediaUrl, item);
-      }
-      
-      const mergedFirestore = firestoreItems.map((fs) => {
-        const fsUrl = fs.mediaUrl ?? '';
-        const fromStorage = fsUrl ? mapByUrl.get(fsUrl) : undefined;
-        const inferredType = normalizeType(fs.type) || (fsUrl ? inferTypeFromUrlOrName(fsUrl) : null) || undefined;
-        return {
-          ...fromStorage,
-          ...fs,
-          type: inferredType ?? fs.type
-        } satisfies MediaItem;
-      });
-      
-      const haveFirestore = firestoreItems.length > 0;
-      const haveStorage = storageItems.length > 0;
-      const all = haveFirestore ? mergedFirestore : storageItems;
-      
-      const withSortableDate = all
+      const firestoreItems = await fetchFromFirestore();
+
+      const withSortableDate = firestoreItems
         .map((item) => ({
           ...item,
           datePreached: item.datePreached || safeDateToString((item as any).updatedAt) || safeDateToString((item as any).createdAt) || undefined
         }))
         .sort((a, b) => String(b.datePreached ?? '').localeCompare(String(a.datePreached ?? '')));
-      
-      // Cache results
+
       cacheRef.current.set('all', withSortableDate);
-      
-      setLoadSource(haveFirestore && haveStorage ? 'mixed' : haveFirestore ? 'firestore' : 'storage');
+
+      setLoadSource('firestore');
       setMediaItems(withSortableDate);
       setLoading(false);
     } catch (e) {
@@ -205,15 +160,13 @@ export default function MediaPage() {
     }
   }, []);
 
-  // Start preloading when component mounts
   useEffect(() => {
     preloadMediaData();
   }, [preloadMediaData]);
 
-  // Optimized fetch with pagination
   const fetchMoreItems = useCallback(async () => {
     if (loading || lastVisibleRef.current === null) return;
-    
+
     try {
       setLoading(true);
       const q = query(
@@ -224,7 +177,7 @@ export default function MediaPage() {
       );
       const snapshot = await getDocs(q);
       const newItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as MediaItem));
-      
+
       setMediaItems(prev => [...prev, ...newItems]);
       setLoadedItems(prev => new Set([...prev, ...newItems.map(item => item.id)]));
       lastVisibleRef.current = snapshot.docs[snapshot.docs.length - 1];
@@ -236,9 +189,9 @@ export default function MediaPage() {
   }, [loading, itemsPerPage]);
 
   const { audioItems, videoItems, pictureItems } = useMemo(() => {
-    const audio = mediaItems.filter((item) => normalizeType(item.type) === 'audio');
-    const video = mediaItems.filter((item) => normalizeType(item.type) === 'video');
-    const pictures = mediaItems.filter((item) => ['image', 'picture', 'photo'].includes(normalizeType(item.type)));
+    const audio = mediaItems.filter((item) => getEffectiveMediaType(item) === 'audio');
+    const video = mediaItems.filter((item) => getEffectiveMediaType(item) === 'video');
+    const pictures = mediaItems.filter((item) => getEffectiveMediaType(item) === 'image');
     return { audioItems: audio, videoItems: video, pictureItems: pictures };
   }, [mediaItems]);
 
@@ -284,102 +237,88 @@ export default function MediaPage() {
           </div>
         ) : (
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {items.map((item) => (
-              <article
-                key={item.id}
-                className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-              >
-                <div className="mb-4 flex items-center gap-3">
-                  <div
-                    className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                      type === 'video'
-                        ? 'bg-red-100 text-red-700'
-                        : type === 'audio'
-                          ? 'bg-purple-100 text-purple-700'
-                          : 'bg-blue-100 text-blue-700'
-                    }`}
-                  >
-                    {type === 'video' ? (
-                      <Video className="h-5 w-5" />
-                    ) : type === 'audio' ? (
-                      <Headphones className="h-5 w-5" />
-                    ) : (
-                      <ImageIcon className="h-5 w-5" />
-                    )}
+            {items.map((item) => {
+              const mediaUrl = getItemMediaUrl(item);
+              const effectiveType = getEffectiveMediaType(item);
+              return (
+                <article
+                  key={item.id}
+                  className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                >
+                  <div className="mb-4 flex items-center gap-3">
+                    <div
+                      className={`flex h-10 w-10 items-center justify-center rounded-lg ${
+                        type === 'video'
+                          ? 'bg-red-100 text-red-700'
+                          : type === 'audio'
+                            ? 'bg-purple-100 text-purple-700'
+                            : 'bg-blue-100 text-blue-700'
+                      }`}
+                    >
+                      {type === 'video' ? (
+                        <Video className="h-5 w-5" />
+                      ) : type === 'audio' ? (
+                        <Headphones className="h-5 w-5" />
+                      ) : (
+                        <ImageIcon className="h-5 w-5" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="line-clamp-1 font-bold text-slate-800">{item.title || 'Untitled'}</h3>
+                      <p className="text-sm text-slate-500">{item.speaker ? `By ${item.speaker}` : 'RCF FUL'}</p>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <h3 className="line-clamp-1 font-bold text-slate-800">{item.title || 'Untitled'}</h3>
-                    <p className="text-sm text-slate-500">{item.speaker ? `By ${item.speaker}` : 'RCF FUL'}</p>
-                  </div>
-                </div>
 
-                {type === 'video' && item.mediaUrl && (() => {
-                  const youtube = getYoutubeEmbedUrl(item.mediaUrl);
-                  const vimeo = getVimeoEmbedUrl(item.mediaUrl);
-                  const embed = youtube ?? vimeo;
-                  if (embed) {
-                    return (
-                      <div className="mb-4 overflow-hidden rounded-lg bg-slate-100">
-                        <div className="relative w-full" style={{ paddingTop: '56.25%' }}>
-                          <iframe
-                            className="absolute inset-0 h-full w-full"
-                            src={embed}
-                            title={item.title || 'Video'}
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                            allowFullScreen
-                          />
-                        </div>
-                      </div>
-                    );
-                  }
-                  return (
-                    <video controls className="mb-4 w-full rounded-lg bg-slate-100">
-                      <source src={item.mediaUrl} />
+                  {effectiveType === 'video' && mediaUrl && (
+                    <video controls style={{ width: '100%', borderRadius: '8px' }}>
+                      <source src={mediaUrl} />
+                      Your browser does not support video playback.
                     </video>
-                  );
-                })()}
+                  )}
 
-                {type === 'audio' && item.mediaUrl && (
-                  <audio controls className="mb-4 w-full">
-                    <source src={item.mediaUrl} />
-                  </audio>
-                )}
+                  {effectiveType === 'audio' && mediaUrl && (
+                    <audio controls preload="metadata" style={{ width: '100%' }}>
+                      <source src={mediaUrl} type="audio/mpeg" />
+                      Your browser does not support audio playback.
+                    </audio>
+                  )}
 
-                {type === 'picture' && item.mediaUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveImage(item)}
-                    className="group relative mb-4 block w-full overflow-hidden rounded-lg bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2"
-                    aria-label={`Open image: ${item.title || 'Picture'}`}
-                  >
-                    <img
-                      src={item.mediaUrl}
-                      alt={item.title || 'Media picture'}
-                      className="h-52 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
-                      loading="lazy"
+                  {type === 'picture' && effectiveType === 'image' && mediaUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveImage(item)}
+                      className="group relative mb-4 block w-full overflow-hidden rounded-lg bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-700 focus:ring-offset-2"
+                      aria-label={`Open image: ${item.title || 'Picture'}`}
+                    >
+                      <img
+                        src={mediaUrl}
+                        alt={item.title || 'Media picture'}
+                        className="h-52 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                        loading="lazy"
+                      />
+                      <div className="pointer-events-none absolute inset-0 bg-black/0 transition-colors duration-200 group-hover:bg-black/10" />
+                    </button>
+                  )}
+
+                  {item.description && (
+                    <ExpandableText
+                      text={item.description}
+                      maxLength={150}
+                      className="mb-4 text-sm text-slate-600"
                     />
-                    <div className="pointer-events-none absolute inset-0 bg-black/0 transition-colors duration-200 group-hover:bg-black/10" />
-                  </button>
-                )}
-
-                {item.description && (
-                  <ExpandableText
-                    text={item.description}
-                    maxLength={150}
-                    className="mb-4 text-sm text-slate-600"
-                  />
-                )}
-                {item.datePreached && (
-                  <div className="mt-auto flex items-center text-xs text-gray-400">
-                    <Calendar className="mr-1 h-3 w-3" />
-                    {(() => {
-                      const d = new Date(item.datePreached);
-                      return Number.isNaN(d.getTime()) ? item.datePreached : format(d, 'MMM d, yyyy');
-                    })()}
-                  </div>
-                )}
-              </article>
-            ))}
+                  )}
+                  {item.datePreached && (
+                    <div className="mt-auto flex items-center text-xs text-gray-400">
+                      <Calendar className="mr-1 h-3 w-3" />
+                      {(() => {
+                        const d = new Date(item.datePreached as string);
+                        return Number.isNaN(d.getTime()) ? item.datePreached : format(d, 'MMM d, yyyy');
+                      })()}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
@@ -392,16 +331,6 @@ export default function MediaPage() {
         <div className="mb-12 text-center">
           <h1 className="text-4xl font-extrabold tracking-tight text-blue-900 sm:text-5xl">Messages & Media</h1>
           <p className="mt-4 text-xl text-slate-500">Listen, watch, and grow through our archive of teachings.</p>
-          {!loading && !loadError && (
-            <p className="mt-2 text-sm text-slate-400">
-              Source:{' '}
-              {loadSource === 'mixed'
-                ? 'Firestore + Storage'
-                : loadSource === 'firestore'
-                  ? 'Firestore'
-                  : 'Storage'}
-            </p>
-          )}
         </div>
 
         {loading ? (
@@ -452,7 +381,7 @@ export default function MediaPage() {
         )}
       </div>
 
-      {activeImage?.mediaUrl && (
+      {activeImage && getItemMediaUrl(activeImage) && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
           role="dialog"
@@ -478,7 +407,7 @@ export default function MediaPage() {
 
             <div className="bg-black">
               <img
-                src={activeImage.mediaUrl}
+                src={getItemMediaUrl(activeImage)}
                 alt={activeImage.title || 'Media picture'}
                 className="max-h-[80vh] w-full object-contain"
               />

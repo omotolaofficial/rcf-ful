@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db } from '../lib/firebase';
-import { collection, query, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
+import { collection, query, orderBy, limit, getDocs, onSnapshot, where } from 'firebase/firestore';
 import { Calendar, Clock, MapPin, ExternalLink, ChevronRight, ChevronLeft, Users, Play, Wallet, Copy, CheckCircle, FileText, Image as ImageIcon, Video } from 'lucide-react';
 import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
@@ -305,21 +305,52 @@ function ExecutivesGlance() {
 }
 
 function SermonGlance() {
+  const [latestAudio, setLatestAudio] = useState<any | null>(null);
+
+  useEffect(() => {
+    async function fetchLatestAudio() {
+      try {
+        const q = query(
+          collection(db, 'media'),
+          where('type', '==', 'audio'),
+          orderBy('createdAt', 'desc'),
+          limit(1)
+        );
+        const snapshot = await getDocs(q);
+        if (!snapshot.empty) {
+          setLatestAudio({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() });
+        }
+      } catch (error) {
+        console.error('Error fetching latest audio:', error);
+      }
+    }
+
+    fetchLatestAudio();
+  }, []);
+
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-      <h3 className="text-base font-bold text-blue-900 flex items-center gap-2 mb-4">
-        Latest Sermon
-      </h3>
+    <Link
+      to="/media#audio"
+      className="block rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+      aria-label="Open latest sermon audio"
+    >
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center text-red-700 shrink-0">
-           <Play className="w-5 h-5 fill-current" />
+          <Play className="w-5 h-5 fill-current" />
         </div>
-        <div>
-          <h5 className="text-sm font-semibold text-slate-800 mb-0.5">"Faith in the Fire"</h5>
-          <p className="text-xs text-slate-500">Pst. Emmanuel</p>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-base font-bold text-blue-900 flex items-center gap-2 mb-4">
+            Latest Sermon
+          </h3>
+          <h5 className="text-sm font-semibold text-slate-800 mb-0.5">
+            {latestAudio?.title ? `"${latestAudio.title}"` : 'Latest audio message'}
+          </h5>
+          <p className="text-xs text-slate-500">
+            {latestAudio?.speaker || 'RCF FUL'}
+          </p>
         </div>
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -335,7 +366,7 @@ function LatestUpdates() {
     // Fetch latest items from all collections
     const fetchLatestUpdates = async () => {
       try {
-        const collections = ['posts', 'announcements', 'events', 'sermons'];
+        const collections = ['posts', 'announcements', 'events', 'media'];
         const fetchPromises = collections.map(async (collectionName) => {
           try {
             const q = query(collection(db, collectionName), orderBy('createdAt', 'desc'), limit(3));
@@ -412,7 +443,7 @@ function LatestUpdates() {
               case 'posts': return <FileText className="w-5 h-5 text-blue-600" />;
               case 'announcements': return <FileText className="w-5 h-5 text-purple-600" />;
               case 'events': return <Calendar className="w-5 h-5 text-green-600" />;
-              case 'sermons': return <FileText className="w-5 h-5 text-orange-600" />;
+              case 'media': return <Video className="w-5 h-5 text-orange-600" />;
               default: return <FileText className="w-5 h-5 text-gray-600" />;
             }
           };
@@ -422,7 +453,7 @@ function LatestUpdates() {
               case 'posts': return 'text-blue-600 bg-blue-50 border-blue-200';
               case 'announcements': return 'text-purple-600 bg-purple-50 border-purple-200';
               case 'events': return 'text-green-600 bg-green-50 border-green-200';
-              case 'sermons': return 'text-orange-600 bg-orange-50 border-orange-200';
+              case 'media': return 'text-orange-600 bg-orange-50 border-orange-200';
               default: return 'text-gray-600 bg-gray-50 border-gray-200';
             }
           };
@@ -454,10 +485,10 @@ function LatestUpdates() {
               
               <div className="mt-2">
                 <Link 
-                  to={`/${item.collectionName === 'posts' ? 'posts' : item.collectionName === 'announcements' ? 'announcements' : item.collectionName === 'events' ? 'events' : 'sermons'}`}
+                  to={`/${item.collectionName === 'posts' ? 'posts' : item.collectionName === 'announcements' ? 'announcements' : item.collectionName === 'events' ? 'events' : 'media'}`}
                   className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
                 >
-                  View {item.collectionName === 'posts' ? 'Posts' : item.collectionName === 'announcements' ? 'Announcements' : item.collectionName === 'events' ? 'Events' : 'Sermons'}
+                  View {item.collectionName === 'posts' ? 'Posts' : item.collectionName === 'announcements' ? 'Announcements' : item.collectionName === 'events' ? 'Events' : 'Media'}
                   <ExternalLink className="w-4 h-4" />
                 </Link>
               </div>

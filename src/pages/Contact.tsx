@@ -2,18 +2,12 @@ import React from 'react';
 import { MapPin, Phone, Mail } from 'lucide-react';
 
 export default function ContactPage() {
-  const pageHeroImage = new URL('../../images/rcf-hero2.jpeg', import.meta.url).href;
-
   return (
     <div className="py-12 bg-slate-50 min-h-screen">
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
           <h1 className="text-4xl font-extrabold text-blue-900 tracking-tight sm:text-5xl">Contact Us</h1>
           <p className="mt-4 text-xl text-slate-500">Reach out for inquiries, counseling, or just to say hello.</p>
-        </div>
-        <div className="relative mb-10 h-48 overflow-hidden rounded-2xl border border-slate-200 shadow-sm sm:h-56">
-          <img src={pageHeroImage} alt="Contact RCF FUL" className="h-full w-full object-contain" />
-          <div className="absolute inset-0 bg-gradient-to-r from-blue-900/70 via-blue-900/35 to-blue-900/20" />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

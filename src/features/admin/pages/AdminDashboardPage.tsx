@@ -68,8 +68,26 @@ export default function AdminDashboardPage() {
 
   async function handleFileChange(fieldName: string, file: File | null) {
     if (!file) return;
-    const url = await uploadAdminFile(config.key, file);
-    setEditingItem((current) => ({ ...(current ?? {}), [fieldName]: url }));
+    const result = await uploadAdminFile(config.key, file);
+    const url = typeof result === 'string' ? result : (result?.secure_url ?? '');
+    const inferredType = file.type.startsWith('image/')
+      ? 'image'
+      : file.type.startsWith('video/')
+        ? 'video'
+        : file.type.startsWith('audio/')
+          ? 'audio'
+          : undefined;
+
+    setEditingItem((current) => ({
+      ...(current ?? {}),
+      [fieldName]: url,
+      ...(config.key === 'media' && fieldName === 'mediaUrl' && inferredType ? {
+        type: inferredType,
+        ...(inferredType === 'image' ? { imageUrl: url } : {})
+      } : {}),
+      cloudinaryPublicId: result?.public_id ?? null,
+      cloudinaryResourceType: result?.resource_type ?? null
+    }));
   }
 
   return (
@@ -176,7 +194,11 @@ export default function AdminDashboardPage() {
                           placeholder="https://..."
                           className="mb-2 w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-900"
                         />
-                        <input type="file" accept="image/*,video/*,audio/*" onChange={(event) => void handleFileChange(field.name, event.target.files?.[0] ?? null)} />
+                        <input
+                          type="file"
+                          accept={config.key === 'media' ? 'audio/*,video/*,image/*' : 'image/*'}
+                          onChange={(event) => void handleFileChange(field.name, event.target.files?.[0] ?? null)}
+                        />
                       </>
                     ) : (
                       <input
